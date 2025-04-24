@@ -1,11 +1,11 @@
 # Pool Party
 
-This code programs a [XAIO ESP32C6 IoT Mini Development Board]
-(https://www.amazon.com/dp/B0DDQ4WBKJ)
+This code programs a
+[XAIO ESP32C6 IoT Mini Development Board](https://www.amazon.com/dp/B0DDQ4WBKJ)
 to control a relay for a pool heater.
 
 You can get more information about the chip itself
-[from the Seeed Studio website](https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/)
+[from the Seeed Studio website](https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/).
 
 # Parts
 
@@ -65,4 +65,46 @@ relay is energized, which enables the water heater.
 ## LED output
 
 No idea what exactly to do with this, probably want to send different flash
-sequences based on how hot the water is or something
+sequences based on how hot the water is or something.
+
+# Code Summary
+
+The code provides a web service that generates hand-crafted JSON responses
+based on the results of all the temperature sensors. It connects to the
+first seen known SSID from a list of SSIDs stored in
+[src/secrets.rs](src/secrets.rs.example), which must be set up from the
+example before you build it.
+
+## Building
+
+To run this code, once everything is set up you can just run `cargo run`.
+This builds everything, flashes the chip, and starts the monitor so you
+can see the debugging information. An example of the success case looks
+like this:
+
+```
+I (533) main_task: Started on CPU0
+I (533) main_task: Calling app_main()
+I (533) erik: Starting up
+I (553) erik: Setting up wifi
+I (573) erik: configuring wifi
+I (733) erik: scanning for APs
+I (5833) erik: Found known ssid 'JaneO'
+I (5833) erik: Connecting to ssid 'JaneO'
+W (8563) wifi:(trc)band:2G, phymode:7
+I (8593) erik: Setting up the temperat, highestRateIdx:0, lowestRateIdx:13, dataSchedTableSize:16
+I (8593) erik: connectedure sensor
+I (8593) erik: Temperature is 82.399994F
+I (8593) erik: Setting up a web server
+W (8603) wifi:<ba-add>idx:0, ifx:0, tid:1, TAHI:0x100d0d5, TALO:0x56259ce8, (ssn:1, win:64, cur_ssn:1), CONF:0xc0001005
+I (8613) erik: Setting up the temperature probe
+W (8613) erik: extern temperature probe reset failed on pin 10
+I (8623) erik: flashing the user LED
+```
+
+At this point, you can access the device's webpage, which gives you
+some json like this:
+
+```
+{ "units": "farenheit", "sensors": { "internal": "71.6" } }
+```
