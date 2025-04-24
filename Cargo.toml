@@ -26,8 +26,18 @@ experimental = ["esp-idf-svc/experimental"]
 log = "0.4"
 esp-idf-svc = { version = "0.51", features = ["embassy-sync"] }
 esp-idf-hal = { version = "0.45.2" }
+anyhow = { version = "1.0.98" }
 
-onewire = { git = "https://github.com/kellerkindt/onewire.git" }
+onewire = { version = "0.3.13" }
 
 [build-dependencies]
 embuild = "0.33"
+
+[patch.crates-io]
+# onewire has some bug fixes that are not released yet :(
+# in particular, it has upgraded its dependencies (embedded-hal)
+onewire = { git = "https://github.com/kellerkindt/onewire.git", rev = "2b32deb9a1d88716d2abc7f475ae0394ddf80bc7" }
+
+[lints.clippy]
+pedantic = "warn"
+nursery = "warn"

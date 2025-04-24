@@ -1,3 +1,5 @@
+use embuild::espidf::sysenv;
+
 fn main() {
-    embuild::espidf::sysenv::output();
+    sysenv::output();
 }
