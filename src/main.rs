@@ -10,9 +10,10 @@ use std::{
 
 use anyhow::anyhow;
 use esp_idf_hal::{
-    delay::FreeRtos,
+    delay::Delay,
     gpio::PinDriver,
     io::Write as _,
+    sys::EspError,
     temp_sensor::{TempSensorConfig, TempSensorDriver},
 };
 use esp_idf_svc::{
@@ -20,19 +21,48 @@ use esp_idf_svc::{
     hal::prelude::Peripherals,
     http::{self, server::EspHttpServer, Method},
     log::{set_target_level, EspLogger},
-    nvs::EspDefaultNvsPartition,
+    nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault},
     sys,
     wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
-use log::{info, warn};
-use onewire::{ds18b20, DeviceSearch, OneWire, DS18B20};
+use log::{debug, info, warn};
+use onewire::{ds18b20, DeviceSearch, OneWire, OpenDrainOutput, Sensor, DS18B20};
 
 static LATEST_TEMPS: OnceLock<Mutex<HashMap<[u8; 8], f64>>> = OnceLock::new();
 
-#[allow(clippy::too_many_lines)]
+#[derive(Debug)]
+struct Preferences {
+    hysteresis: u16,
+    min_on_temp_f: u8,
+}
+
+impl Preferences {
+    const DEFAULT_HYSTERESIS: u16 = 2;
+    const DEFAULT_MIN_ON_TEMP_F: u8 = 70;
+
+    fn from_nvs(nvs: &EspNvs<NvsDefault>) -> Result<Self, EspError> {
+        Ok(Self {
+            hysteresis: nvs
+                .get_u16("hysteresis")?
+                .unwrap_or(Self::DEFAULT_HYSTERESIS),
+            min_on_temp_f: nvs
+                .get_u8("min_on_temp_f")?
+                .unwrap_or(Self::DEFAULT_MIN_ON_TEMP_F),
+        })
+    }
+
+    #[expect(unused)]
+    fn save_to_nvs(&self, nvs: &EspNvs<NvsDefault>) -> Result<(), EspError> {
+        nvs.set_u16("hysteresis", self.hysteresis)?;
+        nvs.set_u8("min_on_temp_f", self.min_on_temp_f)?;
+        Ok(())
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
-    // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
+    // implemented by esp-idf-sys might not link properly.
+    // See https://github.com/esp-rs/esp-idf-template/issues/71
     sys::link_patches();
 
     // Bind the log crate to the ESP Logging facilities
@@ -41,19 +71,24 @@ fn main() -> anyhow::Result<()> {
     set_target_level("*", log::LevelFilter::Warn)?;
     set_target_level("erik", log::LevelFilter::Info)?;
 
-    info!("Starting up");
-
-    // Get the resources we'll need later
+    info!("Fetching resources from hardware");
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
-    let nvs = EspDefaultNvsPartition::take()?;
+    let nvs_partition = EspDefaultNvsPartition::take()?;
+    let nvs = EspNvs::new(nvs_partition.clone(), "pool", true)?;
+
+    // TODO: make preferences mutable and allow them to change from the web
+    // this probably means adding locks and making preferences more global
+    let preferences = Preferences::from_nvs(&nvs)?;
+    info!("{preferences:?}");
 
     info!("Setting up wifi");
-    let espwifi = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?;
+    let mut delay = esp_idf_hal::delay::Delay::new(10000);
+    let espwifi = EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs_partition))?;
     let mut wifi = BlockingWifi::wrap(espwifi, sys_loop)?;
     while let Err(e) = connect_wifi(&mut wifi) {
-        warn!("Error connecting to wifi: {e}, retrying in 10s");
-        FreeRtos::delay_ms(10_000);
+        warn!("Error connecting to wifi: {e}, retrying in 11s");
+        delay.delay_ms(11_000);
     }
 
     info!("Setting up the temperature sensor");
@@ -62,41 +97,10 @@ fn main() -> anyhow::Result<()> {
     ts_driver.enable()?;
     info!("Temperature is {}F", ts_driver.get_fahrenheit()?);
 
-    info!("Setting up the temperature probe");
+    info!("Setting up the temperature probe on Gpio2");
     let mut pin = PinDriver::input_output_od(peripherals.pins.gpio2)?;
     let mut wire = OneWire::new(&mut pin, false);
-    let mut delay = esp_idf_hal::delay::Delay::new(10000);
-    let mut sensors = HashMap::new();
-    if wire.reset(&mut delay).is_err() {
-        warn!("extern temperature probe reset failed");
-    } else {
-        let mut search = DeviceSearch::new();
-        while let Ok(Some(device)) = wire.search_next(&mut search, &mut delay) {
-            info!("found device {device:?}");
-            let addr = device.address;
-            if let Ok(ds18b20) = DS18B20::new(device) {
-                info!("and it was a ds18b20");
-                let resolution = ds18b20.measure_temperature(&mut wire, &mut delay).unwrap();
-                delay.delay_ms(u32::from(resolution.time_ms()));
-                let temperature = ds18b20
-                    .read_temperature(&mut wire, &mut delay)
-                    .map(ds18b20::split_temp)
-                    .map(|(integral, fractions)| {
-                        f64::from(integral) + f64::from(fractions) / 10000.0
-                    })
-                    .unwrap();
-                info!("success! Temperature: {temperature}");
-                sensors.insert(addr, ds18b20);
-                LATEST_TEMPS
-                    .get_or_init(|| Mutex::new(HashMap::new()))
-                    .lock()
-                    .unwrap()
-                    .insert(addr, temperature);
-            } else {
-                warn!("Device didn't seem to be a ds18b20");
-            }
-        }
-    }
+    let sensors = find_devices(&mut wire, &mut delay);
 
     info!("Setting up a web server");
     let mut server = create_server(&mut wifi)?;
@@ -111,8 +115,7 @@ fn main() -> anyhow::Result<()> {
                 (
                     // convert the addr to X:X:X:X:X:X:X:X
                     addr.iter().map(u8::to_string).collect::<Vec<_>>().join(":"),
-                    // convert the temperature into farenheight
-                    temp * 9.0 / 5.0 + 32.0,
+                    temp,
                 )
             })
             .fold(String::new(), |mut output, (addr, temp): (String, f64)| {
@@ -138,38 +141,88 @@ fn main() -> anyhow::Result<()> {
         )
     })?;
 
-    info!("flashing the user LED");
+    info!("starting the main loop");
 
     let mut led = PinDriver::output(peripherals.pins.gpio15)?;
 
     loop {
         led.toggle()?;
-        FreeRtos::delay_ms(2000);
+        delay.delay_ms(2000);
         for (addr, ds18b20) in &sensors {
-            let resolution = ds18b20.measure_temperature(&mut wire, &mut delay).unwrap();
-            delay.delay_ms(u32::from(resolution.time_ms()));
-            if let Ok(temperature) = ds18b20
-                .read_temperature(&mut wire, &mut delay)
-                .map(ds18b20::split_temp)
-                .map(|(integral, fractions)| f64::from(integral) + f64::from(fractions) / 10000.0)
-            {
-                info!("success! Temperature: {temperature}");
-                LATEST_TEMPS
-                    .get_or_init(|| Mutex::new(HashMap::new()))
-                    .lock()
-                    .unwrap()
-                    .insert(*addr, temperature);
-            } else {
-                warn!("unable to read temp");
+            debug!("reading temperature of {addr:?}");
+            match get_temperature_f(ds18b20, &mut wire, &mut delay) {
+                Ok(temperature) => {
+                    info!("success! Temperature: {temperature}");
+                    LATEST_TEMPS
+                        .get_or_init(|| Mutex::new(HashMap::new()))
+                        .lock()
+                        .unwrap()
+                        .insert(*addr, temperature);
+                }
+                Err(e) => {
+                    warn!("unable to read temp: {e:?}");
+                }
             }
         }
     }
 
     /*
-    std::mem::forget(wifi);
-    std::mem::forget(server);
-
+    I think we want to implement our own loop, so we never
+    exit from main, but we could have a service handler that
+    reads the temperatures periodically instead, then we'd
+    just need to keep the wifi and server objects around...
+    forget(wifi);
+    forget(server);
     Ok(()) */
+}
+
+fn find_devices<O: OpenDrainOutput>(
+    wire: &mut OneWire<O>,
+    delay: &mut Delay,
+) -> HashMap<[u8; 8], DS18B20> {
+    let mut sensors = HashMap::new();
+    if wire.reset(delay).is_err() {
+        warn!("extern temperature probe reset failed");
+    } else {
+        let mut search = DeviceSearch::new();
+        while let Ok(Some(device)) = wire.search_next(&mut search, delay) {
+            info!("found device {device:?}");
+            let addr = device.address;
+            if let Ok(ds18b20) = DS18B20::new(device) {
+                info!("and it was a ds18b20");
+                if let Ok(temperature) = get_temperature_f(&ds18b20, wire, delay) {
+                    info!("success! Temperature: {temperature}");
+
+                    LATEST_TEMPS
+                        .get_or_init(|| Mutex::new(HashMap::new()))
+                        .lock()
+                        .unwrap()
+                        .insert(addr, temperature);
+                } else {
+                    warn!("Sensor at {addr:?} didn't get a temperature");
+                }
+                // insert it even if we didn't get a temperature
+                sensors.insert(addr, ds18b20);
+            } else {
+                warn!("Device didn't seem to be a ds18b20");
+            }
+        }
+    }
+    sensors
+}
+
+fn get_temperature_f<O: OpenDrainOutput>(
+    ds18b20: &DS18B20,
+    wire: &mut OneWire<O>,
+    delay: &mut Delay,
+) -> Result<f64, onewire::Error<O::Error>> {
+    let delaytime = ds18b20.start_measurement(wire, delay).unwrap();
+    delay.delay_ms(u32::from(delaytime) + 50);
+    ds18b20
+        .read_temperature(wire, delay)
+        .map(ds18b20::split_temp)
+        .map(|(integral, fractions)| f64::from(integral) + f64::from(fractions) / 10000.0)
+        .map(|temp| temp * 9. / 5. + 32.)
 }
 
 fn create_server(
