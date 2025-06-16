@@ -29,6 +29,7 @@ use log::{debug, info, warn};
 use onewire::{ds18b20, DeviceSearch, OneWire, OpenDrainOutput, Sensor, DS18B20};
 
 static LATEST_TEMPS: OnceLock<Mutex<HashMap<[u8; 8], f64>>> = OnceLock::new();
+static RELAY_STATE: OnceLock<Mutex<bool>> = OnceLock::new();
 
 #[derive(Debug)]
 struct Preferences {
@@ -102,9 +103,63 @@ fn main() -> anyhow::Result<()> {
     let mut wire = OneWire::new(&mut pin, false);
     let sensors = find_devices(&mut wire, &mut delay);
 
+    info!("setting up the temperature probe on gpio21");
+    let mut pin = PinDriver::input_output_od(peripherals.pins.gpio21)?;
+    let mut wire = OneWire::new(&mut pin, false);
+    let sensors2 = find_devices(&mut wire, &mut delay);
+
+    info!("Setting up the relay on gpio1");
+    let mut relay_pin = PinDriver::output(peripherals.pins.gpio1)?;
+    // get the value of the relay from the mutex and set it
+    let mut last_relay_state = RELAY_STATE
+        .get_or_init(|| Mutex::new(false))
+        .lock()
+        .unwrap()
+        .clone();
+    if last_relay_state {
+        info!("Setting relay to ON");
+        relay_pin.set_high()?;
+    } else {
+        info!("Setting relay to OFF");
+        relay_pin.set_low()?;
+    }
     info!("Setting up a web server");
     let mut server = create_server(&mut wifi)?;
     server.fn_handler("/", Method::Get, move |req| {
+        // Extract the query string from the URI
+        let uri = req.uri();
+        let relay_param = uri.splitn(2, '?')
+            .nth(1)
+            .and_then(|qs| {
+                qs.split('&')
+                    .find_map(|kv| {
+                        let mut parts = kv.splitn(2, '=');
+                        match (parts.next(), parts.next()) {
+                            (Some(key), Some(value)) if key == "relay" => Some(value),
+                            _ => None,
+                        }
+                    })
+            });
+
+        if let Some(query_param) = relay_param {
+            info!("Received relay command: {query_param}");
+            let relay_state = match query_param {
+                "on" => true,
+                "off" => false,
+                _ => {
+                    // Return a 400 Bad Request with an error message
+                    return req
+                        .into_status_response(400)?
+                        .write_all(b"Invalid relay command");
+                }
+            };
+            info!("Setting relay to {}", if relay_state { "ON" } else { "OFF" });
+            *RELAY_STATE
+                .get_or_init(|| Mutex::new(false))
+                .lock()
+                .unwrap()
+                = relay_state;
+        }
         let others = LATEST_TEMPS
             .get()
             .unwrap()
@@ -125,10 +180,19 @@ fn main() -> anyhow::Result<()> {
                 output
             });
 
+        // fetch the relay state from the mutex
+        let relay_state = RELAY_STATE
+            .get()
+            .expect("lock was crated earlier")
+            .lock()
+            .unwrap()
+            .clone();
+
         req.into_ok_response()?.write_all(
             format!(
                 r#"{{
                         "units": "farenheit",
+                        "relay": {relay_state},
                         "sensors": {{
                             "internal": {}
                             `{}
@@ -163,6 +227,42 @@ fn main() -> anyhow::Result<()> {
                     warn!("unable to read temp: {e:?}");
                 }
             }
+        }
+        for (addr, ds18b20) in &sensors2 {
+            debug!("reading temperature of {addr:?}");
+            match get_temperature_f(ds18b20, &mut wire, &mut delay) {
+                Ok(temperature) => {
+                    info!("success! Temperature: {temperature}");
+                    LATEST_TEMPS
+                        .get_or_init(|| Mutex::new(HashMap::new()))
+                        .lock()
+                        .unwrap()
+                        .insert(*addr, temperature);
+                }
+                Err(e) => {
+                    warn!("unable to read temp: {e:?}");
+                }
+            }
+        }
+
+        // check for changes in the relay state
+        let relay_state = RELAY_STATE
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .clone();
+        if relay_state != last_relay_state {
+            info!("Relay state changed to {}", if relay_state { "ON" } else { "OFF" });
+
+            if relay_state {
+                relay_pin.set_high()?
+            } else { 
+                relay_pin.set_low()?
+            }
+             last_relay_state = relay_state;
+        } else {
+            debug!("Relay state unchanged: {}", if relay_state { "ON" } else { "OFF" });
         }
     }
 
