@@ -75,6 +75,18 @@ first seen known SSID from a list of SSIDs stored in
 [src/secrets.rs](src/secrets.rs.example), which must be set up from the
 example before you build it.
 
+## Setup
+
+On windows, WSL setup is required. Then:
+
+```sh
+sudo apt update
+sudo snap install rustup --classic
+rustup update
+sudo apt install build-essential python3-venv pkg-config libudev-dev
+cargo install ldproxy espflash
+```
+
 ## Building
 
 To run this code, once everything is set up you can just run `cargo run`.
