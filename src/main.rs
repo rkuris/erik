@@ -111,11 +111,10 @@ fn main() -> anyhow::Result<()> {
     info!("Setting up the relay on gpio1");
     let mut relay_pin = PinDriver::output(peripherals.pins.gpio1)?;
     // get the value of the relay from the mutex and set it
-    let mut last_relay_state = RELAY_STATE
+    let mut last_relay_state = *RELAY_STATE
         .get_or_init(|| Mutex::new(false))
         .lock()
-        .unwrap()
-        .clone();
+        .unwrap();
     if last_relay_state {
         info!("Setting relay to ON");
         relay_pin.set_high()?;
@@ -128,18 +127,15 @@ fn main() -> anyhow::Result<()> {
     server.fn_handler("/", Method::Get, move |req| {
         // Extract the query string from the URI
         let uri = req.uri();
-        let relay_param = uri.splitn(2, '?')
-            .nth(1)
-            .and_then(|qs| {
-                qs.split('&')
-                    .find_map(|kv| {
-                        let mut parts = kv.splitn(2, '=');
-                        match (parts.next(), parts.next()) {
-                            (Some(key), Some(value)) if key == "relay" => Some(value),
-                            _ => None,
-                        }
-                    })
-            });
+        let relay_param = uri.split_once('?').map(|x| x.1).and_then(|qs| {
+            qs.split('&').find_map(|kv| {
+                let mut parts = kv.splitn(2, '=');
+                match (parts.next(), parts.next()) {
+                    (Some("relay"), Some(value)) => Some(value),
+                    _ => None,
+                }
+            })
+        });
 
         if let Some(query_param) = relay_param {
             info!("Received relay command: {query_param}");
@@ -153,12 +149,14 @@ fn main() -> anyhow::Result<()> {
                         .write_all(b"Invalid relay command");
                 }
             };
-            info!("Setting relay to {}", if relay_state { "ON" } else { "OFF" });
+            info!(
+                "Setting relay to {}",
+                if relay_state { "ON" } else { "OFF" }
+            );
             *RELAY_STATE
                 .get_or_init(|| Mutex::new(false))
                 .lock()
-                .unwrap()
-                = relay_state;
+                .unwrap() = relay_state;
         }
         let others = LATEST_TEMPS
             .get()
@@ -181,12 +179,11 @@ fn main() -> anyhow::Result<()> {
             });
 
         // fetch the relay state from the mutex
-        let relay_state = RELAY_STATE
+        let relay_state = *RELAY_STATE
             .get()
             .expect("lock was crated earlier")
             .lock()
-            .unwrap()
-            .clone();
+            .unwrap();
 
         req.into_ok_response()?.write_all(
             format!(
@@ -246,23 +243,24 @@ fn main() -> anyhow::Result<()> {
         }
 
         // check for changes in the relay state
-        let relay_state = RELAY_STATE
-            .get()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .clone();
-        if relay_state != last_relay_state {
-            info!("Relay state changed to {}", if relay_state { "ON" } else { "OFF" });
+        let relay_state = *RELAY_STATE.get().unwrap().lock().unwrap();
+        if relay_state == last_relay_state {
+            debug!(
+                "Relay state unchanged: {}",
+                if relay_state { "ON" } else { "OFF" }
+            );
+        } else {
+            info!(
+                "Relay state changed to {}",
+                if relay_state { "ON" } else { "OFF" }
+            );
 
             if relay_state {
-                relay_pin.set_high()?
-            } else { 
-                relay_pin.set_low()?
+                relay_pin.set_high()?;
+            } else {
+                relay_pin.set_low()?;
             }
-             last_relay_state = relay_state;
-        } else {
-            debug!("Relay state unchanged: {}", if relay_state { "ON" } else { "OFF" });
+            last_relay_state = relay_state;
         }
     }
 
