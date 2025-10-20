@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar Heater Controller</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="login-screen" class="modal">
+        <form id="login-form" class="card">
+            <h1>Solar Heater Login</h1>
+            <label for="username">User</label>
+            <input id="username" name="username" autocomplete="username" required>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <p id="login-error" class="error" hidden>Login failed. Check credentials.</p>
+            <button type="submit">Sign In</button>
+        </form>
+    </div>
+
+    <div id="app-shell" class="hidden">
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="dot status-dot unknown"></span>
+                <span>Solar Heater</span>
+            </div>
+            <nav>
+                <button data-view="status" class="active">Status</button>
+                <button data-view="wifi">Wi-Fi</button>
+                <button data-view="controls">Controls</button>
+                <button data-view="probes">Probes</button>
+                <button data-view="admin">Admin</button>
+            </nav>
+        </aside>
+
+        <main>
+            <header>
+                <h2 id="view-title">Status</h2>
+                <div class="session-controls">
+                    <span id="wifi-pill" class="pill">Wi-Fi: offline</span>
+                    <button id="logout">Log Out</button>
+                </div>
+            </header>
+
+            <section id="status-view" class="view">
+                <div class="grid two-col">
+                    <article class="card">
+                        <h3>Temperatures</h3>
+                        <table id="temperature-table">
+                            <thead>
+                                <tr><th>Probe</th><th>Value</th><th>Updated</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr class="placeholder"><td colspan="3">No data</td></tr>
+                            </tbody>
+                        </table>
+                    </article>
+                    <article class="card">
+                        <h3>Relay</h3>
+                        <p>Current state: <span id="relay-state">Unknown</span></p>
+                        <div class="controls">
+                            <button data-relay="on">Turn On</button>
+                            <button data-relay="off">Turn Off</button>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <section id="wifi-view" class="view hidden">
+                <article class="card">
+                    <h3>Network Selection</h3>
+                    <button id="scan-networks">Scan</button>
+                    <div id="wifi-scan-results" class="list"><p class="empty">No networks</p></div>
+                </article>
+                <article class="card">
+                    <h3>Manual Entry</h3>
+                    <form id="wifi-form" class="stack">
+                        <label for="ssid">SSID</label>
+                        <input id="ssid" name="ssid" required>
+                        <label for="wifi-password">Password</label>
+                        <input id="wifi-password" name="password" type="password" required>
+                        <button type="submit">Save &amp; Connect</button>
+                        <p id="wifi-message" class="notice" hidden></p>
+                    </form>
+                </article>
+            </section>
+
+            <section id="controls-view" class="view hidden">
+                <article class="card">
+                    <h3>Relay Defaults</h3>
+                    <form id="defaults-form" class="stack">
+                        <label for="default-state">Default relay state on boot</label>
+                        <select id="default-state" name="default_state">
+                            <option value="off">Off</option>
+                            <option value="on">On</option>
+                        </select>
+
+                        <label for="hysteresis">Hysteresis (°F)</label>
+                        <input id="hysteresis" name="hysteresis" type="number" min="0" required>
+
+                        <label for="min-on-temp">Minimum On Temperature (°F)</label>
+                        <input id="min-on-temp" name="min_on_temp" type="number" min="0" required>
+
+                        <button type="submit">Save Defaults</button>
+                        <p id="defaults-message" class="notice" hidden></p>
+                    </form>
+                </article>
+            </section>
+
+            <section id="probes-view" class="view hidden">
+                <article class="card">
+                    <h3>Probe Configuration</h3>
+                    <div id="probe-list" class="list"><p class="empty">No probes</p></div>
+                </article>
+            </section>
+
+            <section id="admin-view" class="view hidden">
+                <article class="card">
+                    <h3>Administration</h3>
+                    <div class="stack">
+                        <button id="refresh-status">Refresh Status</button>
+                        <button id="reboot">Reboot Controller</button>
+                        <button id="factory-reset" class="danger">Factory Reset</button>
+                        <p id="admin-message" class="notice" hidden></p>
+                    </div>
+                    <hr class="divider">
+                    <form id="password-form" class="stack">
+                        <h4>Change Password</h4>
+                        <label for="current-password">Current Password</label>
+                        <input id="current-password" name="current_password" type="password" autocomplete="current-password" required>
+                        <label for="new-password">New Password</label>
+                        <input id="new-password" name="new_password" type="password" autocomplete="new-password" required>
+                        <label for="confirm-password">Confirm New Password</label>
+                        <input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" required>
+                        <button type="submit">Update Password</button>
+                        <p id="password-message" class="notice" hidden></p>
+                    </form>
+                </article>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
