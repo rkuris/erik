@@ -3,3 +3,21 @@
 /target
 /Cargo.lock
 /src/secrets.rs
+
+# Build artifacts in subdirectories
+**/target/
+**/Cargo.lock
+**/.cargo/
+!**/.cargo/config.toml
+**/.embuild/
+
+# Temp files
+*.swp
+*.swo
+*~
+
+# Project planning and documentation (use GitHub Wiki/Issues instead)
+/.github/chatmodes/
+/docs/project-plan/
+/docs/security/
+/docs/wifi-ota/

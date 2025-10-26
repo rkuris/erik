@@ -1,0 +1,13 @@
+[build]
+target = "riscv32imc-esp-espidf"
+
+[target.riscv32imc-esp-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+# Ensure ESP-IDF environment is sourced
+ESP_IDF_VERSION = { value = "v5.1" }
