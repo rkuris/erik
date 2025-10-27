@@ -1,0 +1,5 @@
+# Ignored files for the web UI
+node_modules/
+dist/
+.env
+/.cache
