@@ -24,7 +24,11 @@
     }
   },
   "forwardPorts": [80, 443],
-  "postCreateCommand": "rustup component add rust-src --toolchain nightly && echo '. /home/vscode/export-esp.sh' >> ~/.bashrc",
+  "postCreateCommand": "rustup component add rust-src --toolchain nightly && echo '. /home/vscode/export-esp.sh' >> ~/.bashrc && \
+    # Install web UI Node deps (if present) and Playwright browsers (best-effort)
+    if [ -d \"/workspaces/pool-controller/nextgen/webui\" ] && [ -f \"/workspaces/pool-controller/nextgen/webui/package.json\" ]; then \
+      cd /workspaces/pool-controller/nextgen/webui && npm ci --prefer-offline --no-audit || true && npx playwright install --with-deps || true; \
+    fi",
   "remoteUser": "vscode",
   "runArgs": [
     "--privileged",
