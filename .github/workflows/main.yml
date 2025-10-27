@@ -1,0 +1,126 @@
+name: Sync issue labels from Project fields
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled, assigned, unassigned]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync-labels:
+    name: Sync labels from Project fields
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync labels from Project fields
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            if (!issue) {
+              core.info('No issue payload — skipping.');
+              return;
+            }
+
+            const issueNodeId = issue.node_id;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = issue.number;
+
+            // Query ProjectV2 items attached to this issue and read single-select/text values
+            const query = `query($issueId: ID!) {
+              node(id: $issueId) {
+                ... on Issue {
+                  projectItems(first: 20) {
+                    nodes {
+                      id
+                      project { id title }
+                      fieldValues(first: 50) {
+                        nodes {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            projectField { id name }
+                            name
+                          }
+                          ... on ProjectV2ItemFieldTextValue {
+                            projectField { id name }
+                            text
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }`;
+
+            let resp;
+            try {
+              resp = await github.graphql(query, { issueId: issueNodeId });
+            } catch (err) {
+              core.warning(`GraphQL query failed: ${err}`);
+              return;
+            }
+
+            const nodes = (((resp || {}).node || {}).projectItems || {}).nodes || [];
+            let persona = null;
+            let priority = null;
+
+            for (const item of nodes) {
+              const fvs = (item.fieldValues && item.fieldValues.nodes) || [];
+              for (const fv of fvs) {
+                const fieldName = fv.projectField && fv.projectField.name;
+                if (!fieldName) continue;
+                if (fieldName === 'Persona') {
+                  persona = fv.name || fv.text || persona;
+                } else if (fieldName === 'Priority') {
+                  priority = fv.name || fv.text || priority;
+                }
+              }
+            }
+
+            // Build the desired labels
+            const toAdd = [];
+            if (persona) {
+              const pLabel = `persona:${persona.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g,'')}`;
+              toAdd.push(pLabel);
+            }
+            if (priority) {
+              const prLabel = `priority:${priority.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g,'')}`;
+              toAdd.push(prLabel);
+            }
+
+            // Current labels on the issue
+            const currentLabels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name)).filter(Boolean);
+
+            // Compute which labels to remove (other persona:* and priority:* labels not matching desired)
+            const toRemove = [];
+            for (const cl of currentLabels) {
+              if (cl.startsWith('persona:') && !toAdd.includes(cl)) toRemove.push(cl);
+              if (cl.startsWith('priority:') && !toAdd.includes(cl)) toRemove.push(cl);
+            }
+
+            // Add labels (if any)
+            const addUnique = [...new Set(toAdd)];
+            if (addUnique.length > 0) {
+              try {
+                await github.issues.addLabels({ owner, repo, issue_number: issueNumber, labels: addUnique });
+                core.info(`Added labels: ${addUnique.join(', ')}`);
+              } catch (err) {
+                core.warning(`Failed to add labels ${addUnique}: ${err}`);
+              }
+            }
+
+            // Remove labels no longer applicable
+            for (const lbl of toRemove) {
+              try {
+                await github.issues.removeLabel({ owner, repo, issue_number: issueNumber, name: lbl });
+                core.info(`Removed label: ${lbl}`);
+              } catch (err) {
+                // ignore if label already removed or not present
+                core.info(`Could not remove label ${lbl}: ${err.message || err}`);
+              }
+            }
+
+            core.info(`Sync complete for issue #${issueNumber}. Added: [${addUnique.join(', ')}], Removed: [${toRemove.join(', ')}]`);
