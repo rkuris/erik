@@ -59,11 +59,25 @@ jobs:
                       fieldValues(first: 50) {
                         nodes {
                           ... on ProjectV2ItemFieldSingleSelectValue {
-                            field { id name }
+                            field {
+                              ... on ProjectV2FieldConfigurationSingleSelect {
+                                name
+                              }
+                              ... on ProjectV2FieldConfigurationText {
+                                name
+                              }
+                            }
                             name
                           }
                           ... on ProjectV2ItemFieldTextValue {
-                            field { id name }
+                            field {
+                              ... on ProjectV2FieldConfigurationSingleSelect {
+                                name
+                              }
+                              ... on ProjectV2FieldConfigurationText {
+                                name
+                              }
+                            }
                             text
                           }
                         }
