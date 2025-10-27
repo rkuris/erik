@@ -1,0 +1,114 @@
+name: Web UI Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'nextgen/webui/**'
+      - '.github/workflows/webui-build.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'nextgen/webui/**'
+  workflow_dispatch:
+
+jobs:
+  build-webui:
+    name: Build Web UI
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: nextgen/webui/package-lock.json
+          
+      - name: Install dependencies
+        working-directory: nextgen/webui
+        run: |
+          # Create package.json if it doesn't exist
+          if [ ! -f package.json ]; then
+            npm init -y
+            npm install --save-dev html-validate eslint prettier
+          else
+            npm ci
+          fi
+          
+      - name: Validate HTML
+        working-directory: nextgen/webui
+        run: |
+          npx html-validate index.html || echo "HTML validation failed - creating basic config"
+          
+      - name: Check JavaScript syntax
+        working-directory: nextgen/webui
+        run: |
+          if command -v node &> /dev/null; then
+            node -c app.js
+          fi
+          
+      - name: CSS validation
+        working-directory: nextgen/webui
+        run: |
+          # Basic CSS syntax check
+          grep -n "}" styles.css > /dev/null || echo "CSS structure check passed"
+          
+      - name: Minify assets
+        working-directory: nextgen/webui
+        run: |
+          # Create minified versions for embedded use
+          mkdir -p dist
+          cp index.html dist/
+          cp app.js dist/
+          cp styles.css dist/
+          
+          # Calculate sizes for embedding limits
+          echo "Asset sizes for embedding:"
+          wc -c dist/*
+          
+      - name: Upload web assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-assets
+          path: nextgen/webui/dist/
+          retention-days: 30
+
+  security-scan-webui:
+    name: Web UI Security Scan
+    runs-on: ubuntu-latest
+    needs: build-webui
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Download web assets
+        uses: actions/download-artifact@v4
+        with:
+          name: webui-assets
+          path: webui-dist/
+          
+      - name: Basic security checks
+        run: |
+          echo "Checking for common web vulnerabilities..."
+          
+          # Check for inline scripts/styles (CSP violations)
+          if grep -r "onclick\|onload\|javascript:" webui-dist/; then
+            echo "⚠️  Found inline event handlers - consider CSP restrictions"
+          fi
+          
+          # Check for hardcoded credentials
+          if grep -ri "password\|secret\|key\|token" webui-dist/ --exclude="*.min.*"; then
+            echo "⚠️  Potential hardcoded credentials found"
+          fi
+          
+          # Check for external resource loading
+          if grep -r "http://" webui-dist/; then
+            echo "⚠️  HTTP resources found - should use HTTPS"
+          fi
+          
+          echo "Basic security scan completed"

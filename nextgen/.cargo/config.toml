@@ -1,7 +1,7 @@
 [build]
-target = "riscv32imc-esp-espidf"
+target = "riscv32imac-esp-espidf"
 
-[target.riscv32imc-esp-espidf]
+[target.riscv32imac-esp-espidf]
 linker = "ldproxy"
 runner = "espflash flash --monitor"
 

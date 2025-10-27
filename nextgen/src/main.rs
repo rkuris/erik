@@ -10,13 +10,32 @@ use esp_idf_svc::{
     http::server::{self, EspHttpConnection, EspHttpServer, Method, Request},
     io::{Read, Write},
     log::EspLogger,
-    nvs::{EspDefaultNvsPartition, EspNvs},
-    sys::{self, EspError},
+    nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault},
+    sys::{self, EspError, ESP_ERR_NVS_NOT_FOUND},
 };
 use include_dir::{include_dir, Dir};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use pbkdf2::pbkdf2_hmac;
+use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde_json::json;
+use sha2::Sha256;
+use time::OffsetDateTime;
+use rand::{rngs::OsRng, RngCore};
+use subtle::{Choice, ConstantTimeEq};
+use sha2::{Sha256, Digest};
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hex_decode(s: &str) -> Result<Vec<u8>, std::num::ParseIntError> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect()
+}
 
 static WEB_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui");
 static APP_STATE: Lazy<Mutex<AppState>> = Lazy::new(|| Mutex::new(AppState::default()));
@@ -41,7 +60,7 @@ const WWW_AUTH_INVALID: &str = "Bearer error=\"invalid_token\"";
 const WWW_AUTH_EXPIRED: &str =
     "Bearer error=\"invalid_token\", error_description=\"session expired\"";
 
-static NVS: Lazy<Mutex<EspNvs<'static>>> = Lazy::new(|| {
+static NVS: Lazy<Mutex<EspNvs<NvsDefault>>> = Lazy::new(|| {
     let partition = EspDefaultNvsPartition::take().expect("Failed to take default NVS partition");
     let nvs = EspNvs::new(partition, NVS_NAMESPACE, true).expect("Failed to open NVS namespace");
     Mutex::new(nvs)
@@ -535,7 +554,14 @@ where
     T: DeserializeOwned,
 {
     let mut buffer = Vec::new();
-    req.read_to_end(&mut buffer)?;
+    let mut total_read = 0;
+    loop {
+        let read = req.read(&mut buffer[total_read..])?;
+        if read == 0 { break; }
+        total_read += read;
+        if total_read >= buffer.len() { break; }
+    }
+    buffer.truncate(total_read);
     let parsed = serde_json::from_slice(&buffer)?;
     Ok(parsed)
 }
@@ -548,7 +574,7 @@ fn now_rfc3339() -> String {
         (system_now.as_secs() as i128) * 1_000_000_000_i128 + system_now.subsec_nanos() as i128;
     let odt = OffsetDateTime::from_unix_timestamp_nanos(nanos)
         .unwrap_or_else(|_| OffsetDateTime::UNIX_EPOCH);
-    odt.format(&Rfc3339)
+    odt.to_string()
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
 
@@ -561,13 +587,13 @@ fn generate_salt() -> [u8; SALT_LEN] {
 fn generate_token() -> String {
     let mut bytes = [0u8; TOKEN_LEN];
     OsRng.fill_bytes(&mut bytes);
-    hex_encode(bytes)
+    hex_encode(&bytes)
 }
 
 fn derive_password_hash(password: &str, salt: &[u8]) -> String {
     let mut output = [0u8; 32];
     pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut output);
-    hex_encode(output)
+    hex_encode(&output)
 }
 
 fn constant_time_equals(left: &str, right: &str) -> bool {
@@ -578,7 +604,7 @@ fn constant_time_equals(left: &str, right: &str) -> bool {
     choice.unwrap_u8() == 1
 }
 
-fn read_nvs_str(nvs: &mut EspNvs<'static>, key: &str, buffer: &mut [u8]) -> Result<Option<String>> {
+fn read_nvs_str(nvs: &mut EspNvs<NvsDefault>, key: &str, buffer: &mut [u8]) -> Result<Option<String>> {
     match nvs.get_str(key, buffer) {
         Ok(Some(value)) => Ok(Some(value.to_owned())),
         Ok(None) => Ok(None),
@@ -640,7 +666,7 @@ fn persist_credentials_state(credentials: &Credentials, provisioned: bool) -> Re
     let mut nvs = NVS.lock().unwrap();
     nvs.set_str(NVS_KEY_USERNAME, &credentials.username)?;
     nvs.set_str(NVS_KEY_PASSWORD_HASH, &credentials.password_hash)?;
-    let salt_hex = hex_encode(credentials.salt);
+    let salt_hex = hex_encode(&credentials.salt);
     nvs.set_str(NVS_KEY_SALT, &salt_hex)?;
     nvs.set_u8(NVS_KEY_PROVISIONED, if provisioned { 1 } else { 0 })?;
     nvs.commit()?;

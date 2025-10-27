@@ -1,0 +1,33 @@
+{
+  "name": "ESP32 Rust Development",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/pool-controller,type=bind",
+  "workspaceFolder": "/workspaces/pool-controller",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates",
+        "vadimcn.vscode-lldb"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.cargo.target": "riscv32imc-esp-espidf",
+        "files.watcherExclude": {
+          "**/target/**": true
+        }
+      }
+    }
+  },
+  "forwardPorts": [80, 443],
+  "postCreateCommand": "rustup component add rust-src --toolchain nightly && echo '. /home/vscode/export-esp.sh' >> ~/.bashrc",
+  "remoteUser": "vscode",
+  "runArgs": [
+    "--privileged",
+    "--device=/dev/bus/usb"
+  ]
+}

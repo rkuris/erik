@@ -1,0 +1,160 @@
+name: ESP-IDF Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'nextgen/**'
+      - 'legacy/**'
+      - '.github/workflows/esp-idf-build.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'nextgen/**'
+      - 'legacy/**'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Build target (nextgen, legacy, or both)'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - nextgen
+          - legacy
+          - both
+
+env:
+  CARGO_TERM_COLOR: always
+  ESP_IDF_VERSION: v5.1.2
+
+jobs:
+  build-nextgen:
+    name: Build Nextgen Firmware
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.target != 'legacy' }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.ESP_IDF_VERSION }}
+          target: esp32c6
+          
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: rust-src
+          
+      - name: Install cargo tools
+        run: |
+          cargo install ldproxy
+          cargo install espflash
+          cargo install cargo-espflash
+          
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nextgen
+          
+      - name: Check formatting
+        working-directory: nextgen
+        run: cargo fmt -- --check
+        
+      - name: Run clippy
+        working-directory: nextgen
+        run: cargo clippy -- -D warnings
+        
+      - name: Build firmware
+        working-directory: nextgen
+        run: cargo build --release
+        
+      - name: Generate binary for OTA
+        working-directory: nextgen
+        run: |
+          cargo espflash save-image --release --merge ESP32-C6 nextgen-firmware.bin
+          
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextgen-firmware
+          path: nextgen/nextgen-firmware.bin
+          retention-days: 30
+
+  build-legacy:
+    name: Build Legacy Firmware
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.target != 'nextgen' }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.ESP_IDF_VERSION }}
+          target: esp32c6
+          
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: rust-src
+          
+      - name: Install cargo tools
+        run: |
+          cargo install ldproxy
+          cargo install espflash
+          
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: legacy
+          
+      - name: Check formatting
+        working-directory: legacy
+        run: cargo fmt -- --check
+        
+      - name: Run clippy
+        working-directory: legacy
+        run: cargo clippy -- -D warnings
+        
+      - name: Build firmware
+        working-directory: legacy
+        run: cargo build --release
+        
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-firmware
+          path: legacy/target/riscv32imc-esp-espidf/release/legacy
+          retention-days: 30
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [build-nextgen]
+    if: always() && (needs.build-nextgen.result == 'success' || needs.build-nextgen.result == 'skipped')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Run cargo audit
+        run: |
+          cargo install cargo-audit
+          cd nextgen && cargo audit
+          cd ../legacy && cargo audit
+          
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: |
+            nextgen/Cargo.lock
+            legacy/Cargo.lock
