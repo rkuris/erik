@@ -313,12 +313,39 @@ fn handle_logout(mut req: Request<&mut EspHttpConnection>) -> Result<(), EspErro
 
 fn handle_status(req: Request<&mut EspHttpConnection>) -> Result<(), EspError> {
     let state = APP_STATE.lock().unwrap();
+    // Determine a simple provisioning state for now.
+    // TODO: replace with a full provisioning state machine transitions.
+    let provisioning_state = if !state.provisioned {
+        // If not provisioned and wifi mode is AP, report ap-mode; otherwise idle.
+        if state.wifi.mode.eq_ignore_ascii_case("AP") {
+            "ap-mode".into()
+        } else {
+            "idle".into()
+        }
+    } else {
+        "idle".into()
+    };
+
+    // Provide AP-specific info when operating as an access point.
+    let ap_info = if state.wifi.mode.eq_ignore_ascii_case("AP") {
+        Some(ApInfo {
+            ssid: state.wifi.ssid.clone(),
+            // Channel and client count are not yet tracked; use sensible defaults.
+            channel: 1,
+            client_count: 0,
+        })
+    } else {
+        None
+    };
+
     let response = StatusResponse {
         wifi: state.wifi.clone(),
         relay: state.relay.clone(),
         probes: state.probes.clone(),
         uptime_seconds: START_TIME.elapsed().as_secs(),
         firmware: state.firmware.clone(),
+        provisioning_state,
+        ap: ap_info,
     };
     respond_json(req, 200, &response)
 }
@@ -759,6 +786,10 @@ struct StatusResponse {
     uptime_seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     firmware: Option<FirmwareInfo>,
+    #[serde(rename = "provisioningState")]
+    provisioning_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ap: Option<ApInfo>,
 }
 
 #[derive(Serialize)]
@@ -820,6 +851,14 @@ struct WifiNetwork {
 #[derive(Clone, Serialize)]
 struct WifiScanResponse {
     networks: Vec<WifiNetwork>,
+}
+
+#[derive(Clone, Serialize)]
+struct ApInfo {
+    ssid: String,
+    channel: u8,
+    #[serde(rename = "clientCount")]
+    client_count: u16,
 }
 
 #[derive(Clone, Serialize)]
