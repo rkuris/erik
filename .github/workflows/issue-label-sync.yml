@@ -30,6 +30,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             let issue = context.payload.issue;
+            // Make owner/repo available before any code path that may call the REST API
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
             if (!issue) {
               const inputs = (context.payload && context.payload.inputs) || {};
               const issueNumberInput = inputs.issue_number || inputs.issueNumber || process.env.INPUT_ISSUE_NUMBER;
@@ -42,8 +46,6 @@ jobs:
             }
 
             const issueNodeId = issue.node_id;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
             const issueNumber = issue.number;
 
             // Query ProjectV2 items attached to this issue and read single-select/text values
