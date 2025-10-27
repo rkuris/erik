@@ -3,6 +3,14 @@ name: Sync issue labels from Project fields
 on:
   issues:
     types: [opened, edited, reopened, labeled, unlabeled, assigned, unassigned]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to target when running manually'
+        required: false
+      fail_on_noop:
+        description: 'If true, fail the job when no label changes were applied'
+        required: false
 
 permissions:
   issues: write
@@ -21,10 +29,17 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const issue = context.payload.issue;
+            let issue = context.payload.issue;
+            // If run via workflow_dispatch, allow passing an issue_number input and fetch the issue
             if (!issue) {
-              core.info('No issue payload — skipping.');
-              return;
+              const inputs = (context.payload && context.payload.inputs) || {};
+              const issueNumberInput = inputs.issue_number || inputs.issueNumber || process.env.INPUT_ISSUE_NUMBER;
+              if (!issueNumberInput) {
+                core.info('No issue payload or dispatch input — skipping.');
+                return;
+              }
+              const fetched = await github.rest.issues.get({ owner, repo, issue_number: Number(issueNumberInput) });
+              issue = fetched.data;
             }
 
             const issueNodeId = issue.node_id;
