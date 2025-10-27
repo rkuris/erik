@@ -25,9 +25,16 @@
   },
   "forwardPorts": [80, 443],
   "postCreateCommand": "rustup component add rust-src --toolchain nightly && echo '. /home/vscode/export-esp.sh' >> ~/.bashrc && \
-    # Install web UI Node deps (if present) and Playwright browsers (best-effort)
+    # Install web UI Node deps (if present). If package-lock.json is missing, generate it first to allow reproducible installs.
     if [ -d \"/workspaces/pool-controller/nextgen/webui\" ] && [ -f \"/workspaces/pool-controller/nextgen/webui/package.json\" ]; then \
-      cd /workspaces/pool-controller/nextgen/webui && npm ci --prefer-offline --no-audit || true && npx playwright install --with-deps || true; \
+      cd /workspaces/pool-controller/nextgen/webui && \
+        if [ -f package-lock.json ]; then \
+          npm ci --prefer-offline --no-audit || true; \
+        else \
+          npm install --package-lock-only --prefer-offline --no-audit || true; \
+        fi && \
+        # Attempt Playwright browser install (best-effort)
+        npx playwright install --with-deps || true; \
     fi",
   "remoteUser": "vscode",
   "runArgs": [
