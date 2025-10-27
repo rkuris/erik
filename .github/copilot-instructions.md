@@ -129,3 +129,43 @@ I cannot proceed with backend implementation myself.
 - Install extensions only when explicitly listed via `get_project_setup_info`.
 - Do not create new folders (other than `.vscode` for tasks) without user approval.
 - Treat Rust formatting, linting, and testing (`cargo fmt`, `cargo clippy`, `cargo test`) as default validation steps when touching firmware crates.
+
+## Communication Standards
+
+### Issue Comments & Signatures
+
+**Every persona MUST sign issue comments with their role** to maintain clear accountability and traceability across the codebase.
+
+**Format:** End all issue comments with a blank line, then the signature:
+```
+[comment content]
+
+> [Persona-Name]
+```
+
+**Examples:**
+```
+Implemented WiFi status endpoint with JSON response format.
+
+> Backend-Developer
+```
+
+```
+Updated UI with accessibility improvements for WCAG AA compliance.
+
+> Frontend-Developer
+```
+
+**CRITICAL**: 
+- Always include a newline (blank line) before the signature line to ensure proper markdown rendering and visual separation.
+- When posting via `gh issue comment`, use actual newlines in the body text, NOT escaped sequences like `\n\n`.
+- The blank line before the signature should be a literal empty line in your comment body.
+
+**When to sign:**
+- All issue comments on project board tasks (active issues)
+- Status updates and progress notes
+- Validation and acceptance confirmations
+- Handoffs and delegation messages
+- Technical decisions and rationales
+
+**Why:** Maintains audit trail, clarifies persona accountability, enables easy filtering of contributions by role, and supports asynchronous team coordination.

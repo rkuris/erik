@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  webui-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: solar-heater-webui-tests
+    volumes:
+      - ./:/workspace:cached
+      - ./playwright-report:/workspace/playwright-report
+    shm_size: '1gb'
+    working_dir: /workspace
+    entrypoint: ["npx", "playwright", "test", "--reporter=html", "--output=playwright-report"]
+    # exit with container status and don't restart
+    restart: "no"

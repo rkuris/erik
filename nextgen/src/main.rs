@@ -1,5 +1,7 @@
 //! Next-generation firmware scaffold for the solar pool heater controller.
 
+mod wifi;
+
 use std::{
     sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -17,14 +19,14 @@ use include_dir::{include_dir, Dir};
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use pbkdf2::pbkdf2_hmac;
-use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
-use serde_json::json;
-use sha2::Sha256;
-use time::OffsetDateTime;
 use rand::{rngs::OsRng, RngCore};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use subtle::{Choice, ConstantTimeEq};
-use sha2::{Sha256, Digest};
+use time::OffsetDateTime;
+
+use crate::wifi::{self, ProvisioningState, WifiMode, WifiScanResponse, WifiSnapshot};
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
@@ -312,34 +314,19 @@ fn handle_logout(mut req: Request<&mut EspHttpConnection>) -> Result<(), EspErro
 }
 
 fn handle_status(req: Request<&mut EspHttpConnection>) -> Result<(), EspError> {
+    let wifi_snapshot = wifi::CONTROLLER.snapshot();
+    let provisioning_state = provisioning_state_label(wifi_snapshot.provisioning_state);
+    let ap_info = wifi_snapshot.access_point.as_ref().map(|ap| ApInfo {
+        ssid: ap.ssid.clone(),
+        channel: ap.channel,
+        client_count: ap.client_count,
+    });
+
+    let wifi_status = WifiStatus::from_snapshot(&wifi_snapshot);
+
     let state = APP_STATE.lock().unwrap();
-    // Determine a simple provisioning state for now.
-    // TODO: replace with a full provisioning state machine transitions.
-    let provisioning_state = if !state.provisioned {
-        // If not provisioned and wifi mode is AP, report ap-mode; otherwise idle.
-        if state.wifi.mode.eq_ignore_ascii_case("AP") {
-            "ap-mode".into()
-        } else {
-            "idle".into()
-        }
-    } else {
-        "idle".into()
-    };
-
-    // Provide AP-specific info when operating as an access point.
-    let ap_info = if state.wifi.mode.eq_ignore_ascii_case("AP") {
-        Some(ApInfo {
-            ssid: state.wifi.ssid.clone(),
-            // Channel and client count are not yet tracked; use sensible defaults.
-            channel: 1,
-            client_count: 0,
-        })
-    } else {
-        None
-    };
-
     let response = StatusResponse {
-        wifi: state.wifi.clone(),
+        wifi: wifi_status,
         relay: state.relay.clone(),
         probes: state.probes.clone(),
         uptime_seconds: START_TIME.elapsed().as_secs(),
@@ -387,20 +374,7 @@ fn handle_get_probes(req: Request<&mut EspHttpConnection>) -> Result<(), EspErro
 }
 
 fn handle_wifi_scan(req: Request<&mut EspHttpConnection>) -> Result<(), EspError> {
-    let response = WifiScanResponse {
-        networks: vec![
-            WifiNetwork {
-                ssid: "Backyard".into(),
-                rssi: -55,
-                secure: true,
-            },
-            WifiNetwork {
-                ssid: "Guest".into(),
-                rssi: -68,
-                secure: false,
-            },
-        ],
-    };
+    let response = wifi::CONTROLLER.scan_networks();
     respond_json(req, 200, &response)
 }
 
@@ -411,12 +385,7 @@ fn handle_wifi_save(
     if body.ssid.trim().is_empty() {
         return respond_error(req, 400, "SSID cannot be empty");
     }
-    let mut state = APP_STATE.lock().unwrap();
-    state.wifi.mode = "STA".into();
-    state.wifi.connected = false;
-    state.wifi.ssid = body.ssid.clone();
-    state.wifi.rssi = None;
-    state.wifi.ip = None;
+    wifi::CONTROLLER.begin_sta_attempt(&body.ssid);
     respond_json(req, 200, &json!({"saved": true}))
 }
 
@@ -584,9 +553,13 @@ where
     let mut total_read = 0;
     loop {
         let read = req.read(&mut buffer[total_read..])?;
-        if read == 0 { break; }
+        if read == 0 {
+            break;
+        }
         total_read += read;
-        if total_read >= buffer.len() { break; }
+        if total_read >= buffer.len() {
+            break;
+        }
     }
     buffer.truncate(total_read);
     let parsed = serde_json::from_slice(&buffer)?;
@@ -631,7 +604,11 @@ fn constant_time_equals(left: &str, right: &str) -> bool {
     choice.unwrap_u8() == 1
 }
 
-fn read_nvs_str(nvs: &mut EspNvs<NvsDefault>, key: &str, buffer: &mut [u8]) -> Result<Option<String>> {
+fn read_nvs_str(
+    nvs: &mut EspNvs<NvsDefault>,
+    key: &str,
+    buffer: &mut [u8],
+) -> Result<Option<String>> {
     match nvs.get_str(key, buffer) {
         Ok(Some(value)) => Ok(Some(value.to_owned())),
         Ok(None) => Ok(None),
@@ -777,6 +754,16 @@ fn respond_unauthorized(
     Ok(())
 }
 
+fn provisioning_state_label(state: ProvisioningState) -> String {
+    match state {
+        ProvisioningState::Idle => "idle",
+        ProvisioningState::Connecting => "connecting",
+        ProvisioningState::ApMode => "ap-mode",
+        ProvisioningState::Error => "error",
+    }
+    .to_string()
+}
+
 #[derive(Clone, Serialize)]
 struct StatusResponse {
     wifi: WifiStatus,
@@ -806,6 +793,37 @@ struct WifiStatus {
     connected: bool,
     rssi: Option<i32>,
     ip: Option<String>,
+}
+
+impl WifiStatus {
+    fn from_snapshot(snapshot: &WifiSnapshot) -> Self {
+        let (mode, ssid) = match snapshot.mode {
+            WifiMode::Station => (
+                "STA".to_string(),
+                snapshot
+                    .station
+                    .ssid
+                    .clone()
+                    .unwrap_or_else(|| "".to_string()),
+            ),
+            WifiMode::AccessPoint => (
+                "AP".to_string(),
+                snapshot
+                    .access_point
+                    .as_ref()
+                    .map(|ap| ap.ssid.clone())
+                    .unwrap_or_else(|| "Solar-Heater".to_string()),
+            ),
+        };
+
+        WifiStatus {
+            mode,
+            ssid,
+            connected: snapshot.station.connected,
+            rssi: snapshot.station.rssi,
+            ip: snapshot.station.ip.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -839,18 +857,6 @@ struct Credentials {
     password_hash: String,
     salt: [u8; SALT_LEN],
     token: Option<SessionToken>,
-}
-
-#[derive(Clone, Serialize)]
-struct WifiNetwork {
-    ssid: String,
-    rssi: i32,
-    secure: bool,
-}
-
-#[derive(Clone, Serialize)]
-struct WifiScanResponse {
-    networks: Vec<WifiNetwork>,
 }
 
 #[derive(Clone, Serialize)]
@@ -906,7 +912,6 @@ enum TokenValidation {
 }
 
 struct AppState {
-    wifi: WifiStatus,
     relay: RelayStatus,
     defaults: Defaults,
     probes: Vec<ProbeInfo>,
@@ -918,18 +923,6 @@ struct AppState {
 struct PersistentState {
     credentials: Credentials,
     provisioned: bool,
-}
-
-impl Default for WifiStatus {
-    fn default() -> Self {
-        Self {
-            mode: "AP".into(),
-            ssid: "Solar-Heater".into(),
-            connected: false,
-            rssi: None,
-            ip: Some("192.168.4.1".into()),
-        }
-    }
 }
 
 impl Default for RelayStatus {
@@ -1021,7 +1014,6 @@ impl Default for AppState {
         };
 
         Self {
-            wifi: WifiStatus::default(),
             relay: RelayStatus::default(),
             defaults: Defaults::default(),
             probes: vec![

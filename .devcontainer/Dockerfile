@@ -1,3 +1,52 @@
+### Devcontainer Dockerfile for Playwright tests
+FROM mcr.microsoft.com/vscode/devcontainers/base:ubuntu-22.04
+
+# non-interactive apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    ca-certificates \
+    gnupg \
+    build-essential \
+    clang \
+    gcc-multilib \
+    g++-multilib \
+    libc6-dev-i386 \
+    # Playwright runtime deps
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxrandr2 \
+    libgbm1 \
+    libpangocairo-1.0-0 \
+    libgtk-3-0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libpango-1.0-0 \
+    fonts-liberation \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js (LTS 20.x) from NodeSource
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+  && apt-get update \
+  && apt-get install -y nodejs \
+  && npm --version || true
+
+# Keep the image lean
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Default user is vscode in devcontainer base images
+ARG USERNAME=vscode
+USER ${USERNAME}
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-22.04
 
 # Install system dependencies and GitHub CLI

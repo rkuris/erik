@@ -1,4 +1,24 @@
 {
+  "name": "Pool Controller Dev Container",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "settings": {
+    "terminal.integrated.shell.linux": "/bin/bash"
+  },
+  "postCreateCommand": "cd nextgen/webui && npm ci && npx playwright install --with-deps",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.vscode-node-azure-pack", 
+        "ms-vscode-remote.remote-containers"
+      ]
+    }
+  }
+}
+{
   "name": "ESP32 Rust Development",
   "build": {
     "dockerfile": "Dockerfile"
@@ -25,6 +45,10 @@
   },
   "forwardPorts": [80, 443],
   "postCreateCommand": "rustup component add rust-src --toolchain nightly && echo '. /home/vscode/export-esp.sh' >> ~/.bashrc && \
+    # Clone Agentic-Meetings repo for AI coordination
+    if [ ! -d \"/workspaces/agentic-meetings\" ]; then \
+      git clone https://github.com/ekuris-repos/Agentic-Meetings /workspaces/agentic-meetings || echo 'Failed to clone Agentic-Meetings'; \
+    fi && \
     # Install web UI Node deps (if present). If package-lock.json is missing, generate it first to allow reproducible installs.
     if [ -d \"/workspaces/pool-controller/nextgen/webui\" ] && [ -f \"/workspaces/pool-controller/nextgen/webui/package.json\" ]; then \
       cd /workspaces/pool-controller/nextgen/webui && \
