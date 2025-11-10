@@ -16,6 +16,10 @@
 *.swo
 *~
 
+# Logs
+/logs/
+*.log
+
 # Project planning and documentation (use GitHub Wiki/Issues instead)
 /.github/chatmodes/
 /docs/project-plan/
