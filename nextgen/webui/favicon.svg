@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="sun-glow" cx="32" cy="24" r="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe066" />
+      <stop offset="0.6" stop-color="#ffb347" />
+      <stop offset="1" stop-color="#ff9248" />
+    </radialGradient>
+    <linearGradient id="wave" x1="16" y1="46" x2="48" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#006dff" />
+      <stop offset="1" stop-color="#2dd4ff" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="#112031" />
+  <circle cx="32" cy="24" r="18" fill="url(#sun-glow)" />
+  <g fill="none" stroke-linecap="round" stroke-width="4">
+    <path stroke="#ffd56b" d="M32 6v6m0 24v6M12 24h6m28 0h6M17 13l4.2 4.2m21.6 21.6L47 43M17 35l4.2-4.2m21.6-21.6L47 13" />
+    <path stroke="url(#wave)" d="M14 46c4 4 8 4 12 0s8-4 12 0 8 4 12 0" />
+    <path stroke="url(#wave)" opacity="0.65" d="M14 54c4 4 8 4 12 0s8-4 12 0 8 4 12 0" />
+  </g>
+</svg>

@@ -1,8 +1,23 @@
-name: 🚀 DevOps Task
-about: CI/CD, deployment, OTA, or infrastructure work
-title: '[DevOps] '
-labels: ['devops', 'ci-cd', 'infrastructure', 'ota']
+name: 🚀 DevOps Task (DEPRECATED - Use Build Systems or Platform)
+about: DEPRECATED 2025-11-09. Use Build Systems (compiler/CI) or Platform (partition/memory) templates instead.
+title: '[DevOps - DEPRECATED] '
+labels: ['deprecated']
 assignees: ''
+
+---
+
+## ⚠️ THIS TEMPLATE IS DEPRECATED
+
+**As of 2025-11-09, the DevOps role has been split into two specialized personas:**
+
+### Use These Templates Instead:
+
+- **Build Systems Task** → For compiler flags, size optimizations, CI/CD workflows, OTA packaging
+- **Platform Engineering Task** → For partition layout, memory allocation, flash/RAM constraints, hardware config
+
+**Migration Guide:**
+- All build optimization tasks → `persona:build-systems`
+- All partition/layout/flash capacity tasks → `persona:platform`
 
 ---
 

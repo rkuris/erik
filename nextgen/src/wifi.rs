@@ -1,24 +1,20 @@
 use std::sync::Mutex;
 
 use anyhow::Result;
-use log::{error, warn};
-use once_cell::sync::{Lazy, OnceCell};
+use log::warn;
+use once_cell::sync::Lazy;
 use serde::Serialize;
 
 /// High-level provisioning states reported to the UI.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ProvisioningState {
     Idle,
     Connecting,
+    #[default]
     ApMode,
     Error,
-}
-
-impl Default for ProvisioningState {
-    fn default() -> Self {
-        ProvisioningState::ApMode
-    }
 }
 
 /// Snapshot of the station-specific status.
@@ -41,7 +37,7 @@ pub struct AccessPointSnapshot {
 
 impl Default for AccessPointSnapshot {
     fn default() -> Self {
-        AccessPointSnapshot {
+        Self {
             ssid: "Solar-Heater".into(),
             channel: 1,
             client_count: 0,
@@ -64,7 +60,7 @@ pub struct WifiSnapshot {
 
 impl Default for WifiSnapshot {
     fn default() -> Self {
-        WifiSnapshot {
+        Self {
             mode: WifiMode::AccessPoint,
             station: StationSnapshot::default(),
             access_point: Some(AccessPointSnapshot::default()),
@@ -75,15 +71,11 @@ impl Default for WifiSnapshot {
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
+#[derive(Default)]
 pub enum WifiMode {
     Station,
+    #[default]
     AccessPoint,
-}
-
-impl Default for WifiMode {
-    fn default() -> Self {
-        WifiMode::AccessPoint
-    }
 }
 
 /// Representation of a scanned network that we can serialize directly.
@@ -172,11 +164,7 @@ impl WifiController {
         guard.snapshot.mode = WifiMode::AccessPoint;
         guard.snapshot.provisioning_state = ProvisioningState::ApMode;
         guard.snapshot.station = StationSnapshot::default();
-        let mut ap = guard
-            .snapshot
-            .access_point
-            .take()
-            .unwrap_or_else(AccessPointSnapshot::default);
+        let mut ap = guard.snapshot.access_point.take().unwrap_or_default();
         if let Some(custom_ssid) = ssid {
             ap.ssid = custom_ssid;
         }
@@ -196,15 +184,20 @@ impl WifiController {
         {
             match hardware::scan_networks() {
                 Ok(networks) => {
-                    let mut guard = self.inner.lock().unwrap();
-                    guard.scan_cache = networks.clone();
+                    {
+                        let mut guard = self.inner.lock().unwrap();
+                        guard.scan_cache.clone_from(&networks);
+                    }
                     return WifiScanResponse { networks };
                 }
                 Err(err) => warn!("Hardware Wi-Fi scan failed: {err}"),
             }
         }
 
-        let networks = self.inner.lock().unwrap().scan_cache.clone();
+        let networks = {
+            let guard = self.inner.lock().unwrap();
+            guard.scan_cache.clone()
+        };
         WifiScanResponse { networks }
     }
 }
@@ -215,17 +208,17 @@ pub static CONTROLLER: Lazy<WifiController> = Lazy::new(WifiController::new);
 mod hardware {
     use super::{WifiNetwork, CONTROLLER};
     use anyhow::{anyhow, Context, Result};
-    use embedded_svc::wifi::{AuthMethod, ClientConfiguration, Configuration};
     use esp_idf_svc::{
         eventloop::EspSystemEventLoop,
         hal::prelude::Peripherals,
-        wifi::{BlockingWifi, EspWifi},
+        wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
     };
     use heapless::String as HeaplessString;
+    use log::{error, warn};
     use once_cell::sync::OnceCell;
     use std::{sync::Mutex, thread};
 
-    use crate::NVS_PARTITION;
+    use crate::storage::NVS_PARTITION;
 
     struct Driver {
         wifi: Mutex<BlockingWifi<EspWifi<'static>>>,
@@ -235,9 +228,8 @@ mod hardware {
     static DRIVER: OnceCell<Driver> = OnceCell::new();
 
     pub(super) fn initialize() -> Result<()> {
-        DRIVER.get_or_try_init(|| {
-            let peripherals =
-                Peripherals::take().ok_or_else(|| anyhow!("ESP peripherals already taken"))?;
+        DRIVER.get_or_try_init(|| -> Result<Driver> {
+            let peripherals = Peripherals::take().context("Failed to take ESP peripherals")?;
             let sysloop = EspSystemEventLoop::take()?;
             let nvs = NVS_PARTITION.clone();
             let wifi = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?;
@@ -253,7 +245,7 @@ mod hardware {
     pub(super) fn schedule_sta_connect(ssid: String, password: Option<String>) -> Result<()> {
         initialize()?;
         thread::spawn(move || {
-            if let Err(err) = connect_sta(ssid.clone(), password) {
+            if let Err(err) = connect_sta(&ssid, password.as_deref()) {
                 error!("STA connection attempt failed for '{ssid}': {err}");
                 CONTROLLER.mark_error();
             }
@@ -277,51 +269,57 @@ mod hardware {
             .into_iter()
             .map(|ap| WifiNetwork {
                 ssid: ap.ssid.as_str().to_owned(),
-                rssi: ap.rssi,
-                secure: ap.auth_method != AuthMethod::None,
+                rssi: i32::from(ap.signal_strength),
+                secure: ap
+                    .auth_method
+                    .is_some_and(|method| method != AuthMethod::None),
             })
             .collect();
+        drop(wifi);
         Ok(networks)
     }
 
-    fn connect_sta(ssid: String, password: Option<String>) -> Result<()> {
+    fn connect_sta(ssid: &str, password: Option<&str>) -> Result<()> {
         initialize()?;
         let driver = DRIVER
             .get()
             .ok_or_else(|| anyhow!("Wi-Fi driver not initialized"))?;
-        let mut wifi = driver.wifi.lock().unwrap();
+        let (ip_address, rssi) = {
+            let mut wifi = driver.wifi.lock().unwrap();
 
-        if matches!(wifi.is_started(), Ok(true)) {
-            let _ = wifi.disconnect();
-            let _ = wifi.stop();
-        }
-
-        let client_config = build_client_config(&ssid, password.as_deref())?;
-        wifi.set_configuration(&Configuration::Client(client_config))?;
-        wifi.start()?;
-        wifi.connect()?;
-        wifi.wait_netif_up()
-            .context("Interface failed to obtain network parameters")?;
-
-        let ip_address = match wifi.wifi().sta_netif().get_ip_info() {
-            Ok(info) => Some(info.ip.to_string()),
-            Err(err) => {
-                warn!("Failed to read station IP info: {err}");
-                None
+            if matches!(wifi.is_started(), Ok(true)) {
+                let _ = wifi.disconnect();
+                let _ = wifi.stop();
             }
+
+            let client_config = build_client_config(ssid, password)?;
+            wifi.set_configuration(&Configuration::Client(client_config))?;
+            wifi.start()?;
+            wifi.connect()?;
+            wifi.wait_netif_up()
+                .context("Interface failed to obtain network parameters")?;
+
+            let ip_address = match wifi.wifi().sta_netif().get_ip_info() {
+                Ok(info) => Some(info.ip.to_string()),
+                Err(err) => {
+                    warn!("Failed to read station IP info: {err}");
+                    None
+                }
+            };
+
+            let rssi = match wifi.wifi_mut().driver_mut().get_ap_info() {
+                Ok(info) => Some(i32::from(info.signal_strength)),
+                Err(err) => {
+                    warn!("Failed to read AP info: {err}");
+                    None
+                }
+            };
+
+            drop(wifi);
+            (ip_address, rssi)
         };
 
-        let rssi = match wifi.wifi_mut().driver_mut().get_ap_info() {
-            Ok(info) => Some(info.rssi),
-            Err(err) => {
-                warn!("Failed to read AP info: {err}");
-                None
-            }
-        };
-
-        drop(wifi);
-
-        CONTROLLER.mark_sta_connected(&ssid, rssi, ip_address);
+        CONTROLLER.mark_sta_connected(ssid, rssi, ip_address);
 
         Ok(())
     }
@@ -332,7 +330,7 @@ mod hardware {
         if let Some(secret) = password {
             password_value
                 .push_str(secret)
-                .map_err(|_| anyhow!("Wi-Fi password exceeds 64 characters"))?;
+                .map_err(|()| anyhow!("Wi-Fi password exceeds 64 characters"))?;
         }
 
         let auth_method = if password_value.is_empty() {
@@ -354,7 +352,7 @@ mod hardware {
         let mut result = HeaplessString::<N>::new();
         result
             .push_str(value)
-            .map_err(|_| anyhow!("Value exceeds {} characters", N))?;
+            .map_err(|()| anyhow!("Value exceeds {N} characters"))?;
         Ok(result)
     }
 }

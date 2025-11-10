@@ -101,7 +101,95 @@ Tips for Docker Desktop
 
 
 
-Next steps
+## OTA Upload Workflow
+
+The UI includes an OTA (Over-The-Air) firmware update feature available in the Admin view.
+
+### Client-Side Validation
+
+Before posting to the backend, the UI validates:
+
+- **File size:** Maximum 2MB (configurable via `MAX_FIRMWARE_SIZE_MB` constant)
+- **File magic:** Checks for ESP32 firmware magic bytes (`0xE9` at offset 0)
+- **File type:** Must be a `.bin` file
+
+Invalid uploads are rejected immediately with user-friendly error messages, preventing unnecessary network traffic.
+
+### Mock Mode Auto-Detection
+
+The UI automatically disables mock mode when running against real device endpoints:
+
+- **Mock mode enabled:** `localhost` or `127.0.0.1` hosts
+- **Real device mode:** Any other hostname (e.g., `192.168.4.1`, device IP)
+
+When mock mode is active:
+- OTA upload simulates progress and success/failure
+- No actual backend communication occurs
+- Console logs indicate mock responses
+
+When connecting to a real device:
+- Mock API is bypassed
+- Real backend endpoints are called
+- OTA upload streams to `/api/admin/firmware`
+
+### Abort Button Behavior
+
+The **Abort** button visible during OTA upload currently has **limited functionality**:
+
+- ✅ **Client-side:** Stops the upload progress UI countdown
+- ✅ **Client-side:** Resets the form to idle state
+- ❌ **Backend:** Does NOT cancel an in-progress firmware write to flash
+- ❌ **Backend:** Does NOT abort OTA partition updates
+
+**Important:** Once a firmware upload has been accepted by the backend and is streaming to the OTA partition, pressing Abort will only stop the UI progress indicator. The backend will continue writing until completion or error.
+
+**Future Enhancement:** Backend support for cancellable OTA streams requires additional work to safely abort flash writes and clean up partial OTA partitions.
+
+### Testing OTA Upload
+
+**Mock Mode (Local Development):**
+
+```bash
+# Start static server on localhost
+npm run dev  # or http-server -p 3000
+
+# Navigate to http://localhost:3000
+# Login → Admin view → OTA Upload
+# Select any .bin file
+# Observe mock upload progress and completion
+```
+
+**Real Device Mode:**
+
+```bash
+# Flash firmware to ESP32C6
+cd nextgen && cargo espflash flash --release --monitor
+
+# Note device IP address from serial output
+# Navigate to http://<device-ip>
+# Login → Admin view → OTA Upload
+# Select valid ESP32 firmware .bin file
+# Upload streams to device, device reboots on success
+```
+
+**Validation Test Cases:**
+
+1. **Invalid file size:** Upload >2MB file → expect immediate error
+2. **Invalid file type:** Upload .txt or .jpg → expect immediate error
+3. **Invalid magic bytes:** Upload non-firmware .bin → expect immediate error
+4. **Valid firmware (mock):** Upload valid .bin on localhost → expect simulated success
+5. **Valid firmware (device):** Upload on real device → expect actual OTA update + reboot
+
+### Security Notes
+
+- OTA endpoint requires admin authentication (bearer token)
+- File validation runs **before** upload to prevent malicious payloads
+- Backend performs additional signature verification (when implemented per #14)
+
+---
+
+## Next steps
 
 - Add more tests for interactive flows (login + status view), and mock network endpoints if desired.
 - Add a GitHub Actions workflow to run tests on PRs.
+- Add Playwright E2E tests for OTA upload validation and mock behavior

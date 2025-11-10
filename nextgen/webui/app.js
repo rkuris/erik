@@ -30,6 +30,10 @@ const selectors = {
     reboot: document.getElementById("reboot"),
     factoryReset: document.getElementById("factory-reset"),
     adminMessage: document.getElementById("admin-message"),
+    firmwareForm: document.getElementById("firmware-form"),
+    firmwareMessage: document.getElementById("firmware-message"),
+    firmwareAbort: document.getElementById("firmware-abort"),
+    firmwareFile: document.getElementById("firmware-file"),
     passwordForm: document.getElementById("password-form"),
     passwordMessage: document.getElementById("password-message"),
     logout: document.getElementById("logout"),
@@ -52,6 +56,18 @@ const ENDPOINTS = {
     reboot: "/api/admin/reboot",
     factoryReset: "/api/admin/factory-reset",
     passwordChange: "/api/admin/password",
+    firmwareUpload: "/api/admin/firmware",
+};
+
+const LOCAL_MOCK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const FIRMWARE_MAX_BYTES = 2 * 1024 * 1024;
+const ESP_MAGIC_BYTE = 0xe9;
+const FIRMWARE_DEFAULT_REBOOT_SECONDS = 15;
+
+const firmwareState = {
+    countdownId: null,
+    reloadId: null,
+    remaining: null,
 };
 
 async function apiRequest(endpoint, options = {}) {
@@ -110,6 +126,172 @@ function removeStoredValue(key) {
         window.localStorage.removeItem(key);
     } catch (err) {
         console.warn("Unable to remove localStorage item", err);
+    }
+}
+
+function setFirmwareMessage(message, tone = "info") {
+    const element = selectors.firmwareMessage;
+    if (!element) return;
+    element.textContent = message ?? "";
+    element.classList.remove("error", "success");
+    if (!message) {
+        element.hidden = true;
+        return;
+    }
+    if (tone === "error") {
+        element.classList.add("error");
+    } else if (tone === "success") {
+        element.classList.add("success");
+    }
+    element.hidden = false;
+}
+
+function setFirmwareInputsDisabled(disabled) {
+    if (!selectors.firmwareForm) return;
+    const submitButton = /** @type {HTMLButtonElement | null} */ (
+        selectors.firmwareForm.querySelector('button[type="submit"]')
+    );
+    if (submitButton) {
+        submitButton.disabled = disabled;
+    }
+    if (selectors.firmwareFile) {
+        selectors.firmwareFile.disabled = disabled;
+    }
+}
+
+function cancelFirmwareCountdown(message, tone = "info") {
+    if (firmwareState.countdownId != null) {
+        clearInterval(firmwareState.countdownId);
+        firmwareState.countdownId = null;
+    }
+    if (firmwareState.reloadId != null) {
+        clearTimeout(firmwareState.reloadId);
+        firmwareState.reloadId = null;
+    }
+    firmwareState.remaining = null;
+    if (selectors.firmwareAbort) {
+        selectors.firmwareAbort.hidden = true;
+        selectors.firmwareAbort.disabled = false;
+    }
+    setFirmwareInputsDisabled(false);
+    if (message) {
+        setFirmwareMessage(message, tone);
+    }
+}
+
+function beginFirmwareCountdown(seconds) {
+    cancelFirmwareCountdown();
+    const initial = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : FIRMWARE_DEFAULT_REBOOT_SECONDS;
+    firmwareState.remaining = initial;
+    setFirmwareInputsDisabled(true);
+    if (selectors.firmwareAbort) {
+        selectors.firmwareAbort.hidden = false;
+        selectors.firmwareAbort.disabled = false;
+    }
+    setFirmwareMessage(`Upload complete. Controller rebooting in ${initial}s...`, "success");
+
+    firmwareState.countdownId = window.setInterval(() => {
+        if (typeof firmwareState.remaining !== "number") {
+            return;
+        }
+        firmwareState.remaining -= 1;
+        if (firmwareState.remaining <= 0) {
+            clearInterval(firmwareState.countdownId);
+            firmwareState.countdownId = null;
+            if (selectors.firmwareAbort) {
+                selectors.firmwareAbort.hidden = true;
+            }
+            setFirmwareMessage("Controller rebooting now... reconnecting to UI.", "success");
+            return;
+        }
+        setFirmwareMessage(`Controller rebooting in ${firmwareState.remaining}s...`, "success");
+    }, 1000);
+
+    firmwareState.reloadId = window.setTimeout(() => {
+        window.location.reload();
+    }, Math.max(initial, 1) * 1000 + 4000);
+}
+
+async function validateFirmwareFile(file) {
+    if (!file) {
+        throw new Error("Select a firmware (.bin) file before uploading.");
+    }
+    if (file.size === 0) {
+        throw new Error("Firmware file is empty.");
+    }
+    if (file.size > FIRMWARE_MAX_BYTES) {
+        throw new Error("Firmware file must be 2 MiB or smaller.");
+    }
+    const header = new Uint8Array(await file.slice(0, 1).arrayBuffer());
+    if (!header.length || header[0] !== ESP_MAGIC_BYTE) {
+        throw new Error("Selected file does not appear to be an ESP32 firmware image.");
+    }
+}
+
+async function uploadFirmware(file) {
+    if (useMock) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        return { rebootIn: 12 };
+    }
+
+    const headers = { "Content-Type": "application/octet-stream" };
+    if (state.token) {
+        headers["Authorization"] = `Bearer ${state.token}`;
+    }
+
+    const response = await fetch(ENDPOINTS.firmwareUpload, {
+        method: "POST",
+        headers,
+        body: file,
+    });
+
+    if (response.status === 401) {
+        handleUnauthorized();
+        throw new Error("Session expired. Please log in and try again.");
+    }
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "Firmware upload failed.");
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+        return response.json();
+    }
+    return null;
+}
+
+async function handleFirmwareUpload(event) {
+    event.preventDefault();
+    if (!selectors.firmwareForm) return;
+
+    cancelFirmwareCountdown();
+    setFirmwareMessage("");
+
+    const file = selectors.firmwareFile?.files?.[0] ?? null;
+
+    try {
+        await validateFirmwareFile(file);
+    } catch (err) {
+        const message = err instanceof Error && err.message ? err.message : "Invalid firmware file.";
+        setFirmwareMessage(message, "error");
+        return;
+    }
+
+    setFirmwareInputsDisabled(true);
+    setFirmwareMessage("Uploading firmware...");
+
+    try {
+        const result = await uploadFirmware(file);
+        selectors.firmwareForm.reset();
+        const rebootIn = Number(result?.rebootIn);
+        beginFirmwareCountdown(Number.isFinite(rebootIn) ? rebootIn : FIRMWARE_DEFAULT_REBOOT_SECONDS);
+    } catch (err) {
+        const message = err instanceof Error && err.message ? err.message : "Firmware upload failed.";
+        setFirmwareInputsDisabled(false);
+        console.error("Firmware upload failed", err);
+        setFirmwareMessage(message, "error");
     }
 }
 
@@ -215,11 +397,19 @@ const MockApi = (() => {
     };
 })();
 
-let useMock = window.location.protocol === "file:";
-if (!useMock) {
-    useMock = getStoredValue(STORAGE_KEYS.mock) === "1";
-} else {
+let useMock = false;
+const host = window.location.hostname ?? "";
+const storedMockPreference = getStoredValue(STORAGE_KEYS.mock);
+const shouldMockByLocation = window.location.protocol === "file:" || LOCAL_MOCK_HOSTS.has(host);
+
+if (shouldMockByLocation) {
+    useMock = true;
     setStoredValue(STORAGE_KEYS.mock, "1");
+} else {
+    useMock = false;
+    if (storedMockPreference !== "0") {
+        setStoredValue(STORAGE_KEYS.mock, "0");
+    }
 }
 
 function persistPreferences() {
@@ -247,6 +437,8 @@ function clearSession() {
     state.probesCache = null;
     removeStoredValue(STORAGE_KEYS.token);
     persistPreferences();
+    cancelFirmwareCountdown();
+    setFirmwareMessage("");
     selectors.loginForm.reset();
     selectors.appShell.classList.add("hidden");
     selectors.loginScreen.classList.remove("hidden");
@@ -614,6 +806,15 @@ function bindEvents() {
         event.preventDefault();
         await updatePassword(new FormData(selectors.passwordForm));
     });
+
+    if (selectors.firmwareForm) {
+        selectors.firmwareForm.addEventListener("submit", handleFirmwareUpload);
+    }
+    if (selectors.firmwareAbort) {
+        selectors.firmwareAbort.addEventListener("click", () => {
+            cancelFirmwareCountdown("Reboot countdown cancelled. Controller may stay online if the restart has not begun.");
+        });
+    }
 }
 
 function init() {

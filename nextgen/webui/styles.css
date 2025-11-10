@@ -80,6 +80,17 @@ button.danger {
     background: var(--danger);
 }
 
+button.secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+}
+
+button.secondary:hover,
+button.secondary:focus {
+    background: rgba(14, 165, 233, 0.1);
+}
+
 .error {
     color: var(--danger);
     margin-top: 0.75rem;
@@ -88,6 +99,15 @@ button.danger {
 .notice {
     color: var(--muted);
     margin-top: 1rem;
+}
+
+.notice.success {
+    color: #047857;
+}
+
+button[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
 #app-shell {

@@ -33,9 +33,10 @@ jobs:
             // Make owner/repo available before any code path that may call the REST API
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            // Capture workflow_dispatch inputs (if any) for use throughout the script
+            const inputs = (context.payload && context.payload.inputs) || {};
 
             if (!issue) {
-              const inputs = (context.payload && context.payload.inputs) || {};
               const issueNumberInput = inputs.issue_number || inputs.issueNumber || process.env.INPUT_ISSUE_NUMBER;
               if (!issueNumberInput) {
                 core.info('No issue payload or dispatch input — skipping.');
@@ -159,7 +160,8 @@ jobs:
             core.info(`Sync complete for issue #${issueNumber}. Added: [${addUnique.join(', ')}], Removed: [${toRemove.join(', ')}]`);
 
             // Optionally fail the job if nothing changed (no-op)
-            const failOnNoop = (process.env.FAIL_ON_NOOP || 'false').toLowerCase() === 'true';
+            // Allow the workflow_dispatch input `fail_on_noop` to override the env var
+            const failOnNoop = ((process.env.FAIL_ON_NOOP || inputs.fail_on_noop || inputs.failOnNoop || 'false').toString().toLowerCase() === 'true');
             if (addUnique.length === 0 && toRemove.length === 0) {
               if (failOnNoop) {
                 core.setFailed(`No persona/priority label updates were applied for issue #${issueNumber}`);

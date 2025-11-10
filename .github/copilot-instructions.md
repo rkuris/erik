@@ -51,27 +51,33 @@
 
 - **Backend Developer** owns firmware crates (`nextgen/src`, `legacy/src`). 
   - MUST NOT touch: UI files, build workflows, documentation, test plans
-  - MUST delegate to: Frontend (UI), DevOps (CI/CD), PM (docs), QA (test plans), Security (reviews)
+  - MUST delegate to: Frontend (UI), Build Systems (CI/CD), Platform (partition config), PM (docs), QA (test plans), Security (reviews)
 
 - **Frontend Developer** owns `nextgen/webui` and related assets.
   - MUST NOT touch: Backend code, build systems, hardware config, documentation
-  - MUST delegate to: Backend (APIs), DevOps (build), PM (docs), QA (test plans), Security (reviews)
+  - MUST delegate to: Backend (APIs), Build Systems (build), Platform (hardware constraints), PM (docs), QA (test plans), Security (reviews)
 
-- **DevOps Engineer** owns build tooling, CI/CD workflows, OTA packaging, and environment setup.
-  - MUST NOT touch: Application source code, UI implementation, documentation content
-  - MUST delegate to: Backend/Frontend (code changes), PM (docs), QA (test code), Security (config review)
+- **Build Systems Engineer** owns compiler flags, optimization configs, build tooling, CI/CD workflows, and OTA packaging.
+  - MUST NOT touch: Application source code, UI implementation, documentation content, partition layouts
+  - MUST delegate to: Backend/Frontend (code changes), Platform (partition/memory), PM (docs), QA (test code), Security (config review)
+  - MUST cross-reference: Platform Engineer when size optimizations affect memory allocation or partition budgets
+
+- **Platform Engineer** owns partition layout, memory allocation, flash/RAM constraints, and hardware platform configuration.
+  - MUST NOT touch: Application source code, UI implementation, documentation content, build tooling
+  - MUST delegate to: Backend/Frontend (code changes), Build Systems (compiler flags), PM (docs), QA (test code), Security (config review)
+  - MUST cross-reference: Build Systems Engineer when partition changes require coordinated size reduction
 
 - **QA Test Engineer** owns automated/manual test planning, execution, and coverage tracking.
   - MUST NOT touch: Production source code (only test code), build infrastructure, documentation
-  - MUST delegate to: Backend/Frontend (defect fixes), DevOps (CI), PM (docs), Security (security tests)
+  - MUST delegate to: Backend/Frontend (defect fixes), Build Systems/Platform (CI/tooling), PM (docs), Security (security tests)
 
 - **Web Security Expert** provides reviews and mitigation guidance.
   - MUST NOT touch: ANY implementation files directly
-  - MUST delegate to: Backend/Frontend (all fixes), DevOps (security tooling), PM (security docs), QA (security tests)
+  - MUST delegate to: Backend/Frontend (all fixes), Build Systems (security tooling), Platform (secure boot/flash encryption), PM (security docs), QA (security tests)
 
 - **Project Manager** owns documentation, status reporting, and task coordination (`docs/`, README, `.github/`).
   - MUST NOT touch: Source code, build systems, test code, infrastructure automation
-  - MUST delegate to: Backend/Frontend (implementation), DevOps (tooling), QA (testing), Security (reviews)
+  - MUST delegate to: Backend/Frontend (implementation), Build Systems (tooling), Platform (hardware config), QA (testing), Security (reviews)
 
 ### Delegation Protocol (ALL personas must follow)
 
@@ -160,6 +166,48 @@ Updated UI with accessibility improvements for WCAG AA compliance.
 - Always include a newline (blank line) before the signature line to ensure proper markdown rendering and visual separation.
 - When posting via `gh issue comment`, use actual newlines in the body text, NOT escaped sequences like `\n\n`.
 - The blank line before the signature should be a literal empty line in your comment body.
+
+### Newline Handling (Prevent literal `\\n` appearing in issues)
+
+Several agents have produced issue bodies using literal `\\n` escape sequences; these render verbatim on GitHub instead of creating line breaks. Follow these rules:
+
+1. DO NOT rely on the raw string `\\n` to create a line break; supply real newlines.
+2. Prefer a body file (`--body-file`) or a here-doc to ensure formatting.
+3. If you use `$'...'` quoting, confirm the shell expands `\\n` into actual newlines (it usually does in bash) — otherwise, use a body file.
+4. Never use plain single quotes with escape sequences (they stay literal).
+5. For multi-paragraph comments: create a temp file; it's the safest, most portable approach.
+
+#### Recommended Patterns
+
+Correct (here-doc + body file):
+```
+cat > /tmp/comment.md <<'EOF'
+Triage confirmation:
+
+Agreed root cause: synchronous PBKDF2 (100k) ...
+
+> Backend-Developer
+EOF
+gh issue comment 41 --body-file /tmp/comment.md
+```
+
+Correct (bash ANSI C quoting — ONLY if you need quick inline):
+```
+gh issue comment 41 --body $'Triage confirmation:\n\nAgreed root cause: synchronous PBKDF2 (100k) ...\n\n> Backend-Developer'
+```
+(This expands `\n` to real newlines before sending to GitHub.)
+
+Incorrect (escape sequences remain literal on GitHub):
+```
+gh issue comment 41 --body 'Triage confirmation:\n\nAgreed root cause: ...\n\n> Backend-Developer'
+```
+
+Quick pre-flight checklist:
+- [ ] No literal `\\n` sequences remain
+- [ ] Blank line exists before persona signature
+- [ ] Chose body file for complex formatting
+
+(Future improvement: add a helper script to reject bodies containing literal `\\n`.)
 
 **When to sign:**
 - All issue comments on project board tasks (active issues)

@@ -1,27 +1,8 @@
 {
-  "name": "Pool Controller Dev Container",
+  "name": "ESP32-C6 Rust Development",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."
-  },
-  "settings": {
-    "terminal.integrated.shell.linux": "/bin/bash"
-  },
-  "postCreateCommand": "cd nextgen/webui && npm ci && npx playwright install --with-deps",
-  "remoteUser": "vscode",
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "ms-vscode.vscode-node-azure-pack", 
-        "ms-vscode-remote.remote-containers"
-      ]
-    }
-  }
-}
-{
-  "name": "ESP32 Rust Development",
-  "build": {
-    "dockerfile": "Dockerfile"
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/pool-controller,type=bind",
   "workspaceFolder": "/workspaces/pool-controller",
@@ -44,25 +25,11 @@
     }
   },
   "forwardPorts": [80, 443],
-  "postCreateCommand": "rustup component add rust-src --toolchain nightly && echo '. /home/vscode/export-esp.sh' >> ~/.bashrc && \
-    # Clone Agentic-Meetings repo for AI coordination
-    if [ ! -d \"/workspaces/agentic-meetings\" ]; then \
-      git clone https://github.com/ekuris-repos/Agentic-Meetings /workspaces/agentic-meetings || echo 'Failed to clone Agentic-Meetings'; \
-    fi && \
-    # Install web UI Node deps (if present). If package-lock.json is missing, generate it first to allow reproducible installs.
-    if [ -d \"/workspaces/pool-controller/nextgen/webui\" ] && [ -f \"/workspaces/pool-controller/nextgen/webui/package.json\" ]; then \
-      cd /workspaces/pool-controller/nextgen/webui && \
-        if [ -f package-lock.json ]; then \
-          npm ci --prefer-offline --no-audit || true; \
-        else \
-          npm install --package-lock-only --prefer-offline --no-audit || true; \
-        fi && \
-        # Attempt Playwright browser install (best-effort)
-        npx playwright install --with-deps || true; \
-    fi",
+  "postCreateCommand": "cd /workspaces/pool-controller/nextgen/webui && npm install --prefer-offline --no-audit || true",
   "remoteUser": "vscode",
   "runArgs": [
     "--privileged",
-    "--device=/dev/bus/usb"
+    "--device=/dev/bus/usb",
+    "--device=/dev/ttyACM0"
   ]
 }
